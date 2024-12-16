@@ -1,7 +1,7 @@
 Commands in Bubble Tea
 ======================
 
-This is the second tutorial for Bubble Tea covering commands, which deal with
+This is the second tutorial for Bubble Tea, covering commands, which deal with
 I/O. The tutorial assumes you have a working knowledge of Go and a decent
 understanding of [the first tutorial][basics].
 
@@ -165,7 +165,7 @@ func (m model) View() string {
 
 The only thing left to do is run the program, so let's do that! Our initial
 model doesn't need any data at all in this case, we just initialize it with
-as a `struct` with defaults.
+a `model` struct with default values.
 
 ```go
 func main() {

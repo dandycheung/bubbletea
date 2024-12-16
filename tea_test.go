@@ -3,6 +3,7 @@ package tea
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,7 +47,10 @@ func TestTeaModel(t *testing.T) {
 	var in bytes.Buffer
 	in.Write([]byte("q"))
 
-	p := NewProgram(&testModel{}, WithInput(&in), WithOutput(&buf))
+	ctx, cancel := context.WithTimeout(context.TODO(), 3*time.Second)
+	defer cancel()
+
+	p := NewProgram(&testModel{}, WithInput(&in), WithOutput(&buf), WithContext(ctx))
 	if _, err := p.Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +81,47 @@ func TestTeaQuit(t *testing.T) {
 	}
 }
 
+func TestTeaWithFilter(t *testing.T) {
+	testTeaWithFilter(t, 0)
+	testTeaWithFilter(t, 1)
+	testTeaWithFilter(t, 2)
+}
+
+func testTeaWithFilter(t *testing.T, preventCount uint32) {
+	var buf bytes.Buffer
+	var in bytes.Buffer
+
+	m := &testModel{}
+	shutdowns := uint32(0)
+	p := NewProgram(m,
+		WithInput(&in),
+		WithOutput(&buf),
+		WithFilter(func(_ Model, msg Msg) Msg {
+			if _, ok := msg.(QuitMsg); !ok {
+				return msg
+			}
+			if shutdowns < preventCount {
+				atomic.AddUint32(&shutdowns, 1)
+				return nil
+			}
+			return msg
+		}))
+
+	go func() {
+		for atomic.LoadUint32(&shutdowns) <= preventCount {
+			time.Sleep(time.Millisecond)
+			p.Quit()
+		}
+	}()
+
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if shutdowns != preventCount {
+		t.Errorf("Expected %d prevented shutdowns, got %d", preventCount, shutdowns)
+	}
+}
+
 func TestTeaKill(t *testing.T) {
 	var buf bytes.Buffer
 	var in bytes.Buffer
@@ -93,7 +138,7 @@ func TestTeaKill(t *testing.T) {
 		}
 	}()
 
-	if _, err := p.Run(); err != ErrProgramKilled {
+	if _, err := p.Run(); !errors.Is(err, ErrProgramKilled) {
 		t.Fatalf("Expected %v, got %v", ErrProgramKilled, err)
 	}
 }
@@ -115,7 +160,7 @@ func TestTeaContext(t *testing.T) {
 		}
 	}()
 
-	if _, err := p.Run(); err != ErrProgramKilled {
+	if _, err := p.Run(); !errors.Is(err, ErrProgramKilled) {
 		t.Fatalf("Expected %v, got %v", ErrProgramKilled, err)
 	}
 }

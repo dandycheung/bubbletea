@@ -3,8 +3,9 @@ package tea
 import (
 	"context"
 	"io"
+	"sync/atomic"
 
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ProgramOption is used to set options when initializing a Program. Program can
@@ -28,23 +29,42 @@ func WithContext(ctx context.Context) ProgramOption {
 // won't need to use this.
 func WithOutput(output io.Writer) ProgramOption {
 	return func(p *Program) {
-		p.output = termenv.NewOutput(output, termenv.WithColorCache(true))
+		p.output = output
 	}
 }
 
 // WithInput sets the input which, by default, is stdin. In most cases you
-// won't need to use this.
+// won't need to use this. To disable input entirely pass nil.
+//
+//	p := NewProgram(model, WithInput(nil))
 func WithInput(input io.Reader) ProgramOption {
 	return func(p *Program) {
 		p.input = input
-		p.startupOptions |= withCustomInput
+		p.inputType = customInput
 	}
 }
 
 // WithInputTTY opens a new TTY for input (or console input device on Windows).
 func WithInputTTY() ProgramOption {
 	return func(p *Program) {
-		p.startupOptions |= withInputTTY
+		p.inputType = ttyInput
+	}
+}
+
+// WithEnvironment sets the environment variables that the program will use.
+// This useful when the program is running in a remote session (e.g. SSH) and
+// you want to pass the environment variables from the remote session to the
+// program.
+//
+// Example:
+//
+//	var sess ssh.Session // ssh.Session is a type from the github.com/charmbracelet/ssh package
+//	pty, _, _ := sess.Pty()
+//	environ := append(sess.Environ(), "TERM="+pty.Term)
+//	p := tea.NewProgram(model, tea.WithEnvironment(environ)
+func WithEnvironment(env []string) ProgramOption {
+	return func(p *Program) {
+		p.environ = env
 	}
 }
 
@@ -63,6 +83,14 @@ func WithoutSignalHandler() ProgramOption {
 func WithoutCatchPanics() ProgramOption {
 	return func(p *Program) {
 		p.startupOptions |= withoutCatchPanics
+	}
+}
+
+// WithoutSignals will ignore OS signals.
+// This is mainly useful for testing.
+func WithoutSignals() ProgramOption {
+	return func(p *Program) {
+		atomic.StoreUint32(&p.ignoreSignals, 1)
 	}
 }
 
@@ -86,12 +114,22 @@ func WithAltScreen() ProgramOption {
 	}
 }
 
+// WithoutBracketedPaste starts the program with bracketed paste disabled.
+func WithoutBracketedPaste() ProgramOption {
+	return func(p *Program) {
+		p.startupOptions |= withoutBracketedPaste
+	}
+}
+
 // WithMouseCellMotion starts the program with the mouse enabled in "cell
 // motion" mode.
 //
 // Cell motion mode enables mouse click, release, and wheel events. Mouse
 // movement events are also captured if a mouse button is pressed (i.e., drag
 // events). Cell motion mode is better supported than all motion mode.
+//
+// This will try to enable the mouse in extended mode (SGR), if that is not
+// supported by the terminal it will fall back to normal mode (X10).
 //
 // To enable mouse cell motion once the program has already started running use
 // the EnableMouseCellMotion command. To disable the mouse when the program is
@@ -112,6 +150,9 @@ func WithMouseCellMotion() ProgramOption {
 // wheel, and motion events, which are delivered regardless of whether a mouse
 // button is pressed, effectively enabling support for hover interactions.
 //
+// This will try to enable the mouse in extended mode (SGR), if that is not
+// supported by the terminal it will fall back to normal mode (X10).
+//
 // Many modern terminals support this, but not all. If in doubt, use
 // EnableMouseCellMotion instead.
 //
@@ -127,6 +168,14 @@ func WithMouseAllMotion() ProgramOption {
 	}
 }
 
+// WithRenderer sets a custom renderer. This is useful if you want to use a
+// custom renderer to process the output of the program differently.
+func WithRenderer(renderer Renderer) ProgramOption {
+	return func(p *Program) {
+		p.renderer = renderer
+	}
+}
+
 // WithoutRenderer disables the renderer. When this is set output and log
 // statements will be plainly sent to stdout (or another output if one is set)
 // without any rendering and redrawing logic. In other words, printing and
@@ -135,9 +184,12 @@ func WithMouseAllMotion() ProgramOption {
 // application, or to provide an additional non-TUI mode to your Bubble Tea
 // programs. For example, your program could behave like a daemon if output is
 // not a TTY.
+//
+// Deprecated: This option is deprecated and will be removed in a future
+// version of this package. Use [NilRenderer] with [WithRenderer] instead.
 func WithoutRenderer() ProgramOption {
 	return func(p *Program) {
-		p.renderer = &nilRenderer{}
+		p.renderer = &NilRenderer{}
 	}
 }
 
@@ -146,8 +198,147 @@ func WithoutRenderer() ProgramOption {
 //
 // This feature is provisional, and may be changed or removed in a future version
 // of this package.
+//
+// Deprecated: This option is deprecated and will be removed in a future
+// version of this package.
 func WithANSICompressor() ProgramOption {
 	return func(p *Program) {
 		p.startupOptions |= withANSICompressor
+	}
+}
+
+// WithFilter supplies an event filter that will be invoked before Bubble Tea
+// processes a tea.Msg. The event filter can return any tea.Msg which will then
+// get handled by Bubble Tea instead of the original event. If the event filter
+// returns nil, the event will be ignored and Bubble Tea will not process it.
+//
+// As an example, this could be used to prevent a program from shutting down if
+// there are unsaved changes.
+//
+// Example:
+//
+//	func filter(m tea.Model, msg tea.Msg) tea.Msg {
+//		if _, ok := msg.(tea.QuitMsg); !ok {
+//			return msg
+//		}
+//
+//		model := m.(myModel)
+//		if model.hasChanges {
+//			return nil
+//		}
+//
+//		return msg
+//	}
+//
+//	p := tea.NewProgram(Model{}, tea.WithFilter(filter));
+//
+//	if _,err := p.Run(); err != nil {
+//		fmt.Println("Error running program:", err)
+//		os.Exit(1)
+//	}
+func WithFilter(filter func(Model, Msg) Msg) ProgramOption {
+	return func(p *Program) {
+		p.filter = filter
+	}
+}
+
+// WithFPS sets a custom maximum FPS at which the renderer should run. If
+// less than 1, the default value of 60 will be used. If over 120, the FPS
+// will be capped at 120.
+func WithFPS(fps int) ProgramOption {
+	return func(p *Program) {
+		p.fps = fps
+	}
+}
+
+// WithReportFocus enables reporting when the terminal gains and lost focus.
+//
+// You can then check for FocusMsg and BlurMsg in your model's Update method.
+func WithReportFocus() ProgramOption {
+	return func(p *Program) {
+		p.startupOptions |= withReportFocus
+	}
+}
+
+// WithEnhancedKeyboard enables support for enhanced keyboard features. This
+// unambiguously reports more key combinations than traditional terminal
+// keyboard sequences. This might also enable reporting of release key events
+// depending on the terminal emulator supporting it.
+//
+// This is a syntactic sugar for WithKittyKeyboard(3) and WithXtermModifyOtherKeys(1).
+func WithEnhancedKeyboard() ProgramOption {
+	return func(p *Program) {
+		_WithKittyKeyboard(ansi.KittyDisambiguateEscapeCodes |
+			ansi.KittyReportEventTypes)(p)
+		_WithModifyOtherKeys(1)(p)
+	}
+}
+
+// _WithKittyKeyboard enables support for the Kitty keyboard protocol. This
+// protocol enables more key combinations and events than the traditional
+// ambiguous terminal keyboard sequences.
+//
+// Use flags to specify which features you want to enable.
+//
+//	0:  Disable all features
+//	1:  Disambiguate escape codes
+//	2:  Report event types
+//	4:  Report alternate keys
+//	8:  Report all keys as escape codes
+//	16: Report associated text
+//
+// See https://sw.kovidgoyal.net/kitty/keyboard-protocol/ for more information.
+func _WithKittyKeyboard(flags int) ProgramOption {
+	return func(p *Program) {
+		p.kittyFlags = flags
+		p.startupOptions |= withKittyKeyboard
+	}
+}
+
+// _WithModifyOtherKeys enables support for the XTerm modifyOtherKeys feature.
+// This feature allows the terminal to report ambiguous keys as escape codes.
+// This is useful for terminals that don't support the Kitty keyboard protocol.
+//
+// The mode can be one of the following:
+//
+//	0: Disable modifyOtherKeys
+//	1: Report ambiguous keys as escape codes
+//	2: Report ambiguous keys as escape codes including modified keys like Alt-<key>
+//	   and Meta-<key>
+//
+// See https://invisible-island.net/xterm/manpage/xterm.html#VT100-Widget-Resources:modifyOtherKeys
+func _WithModifyOtherKeys(mode int) ProgramOption {
+	return func(p *Program) {
+		p.modifyOtherKeys = mode
+		p.startupOptions |= withModifyOtherKeys
+	}
+}
+
+// _WithWindowsInputMode enables Windows Input Mode (win32-input-mode) which
+// allows for more advanced input handling and reporting. This is experimental
+// and may not work on all terminals.
+//
+// See
+// https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md
+// for more information.
+func _WithWindowsInputMode() ProgramOption { //nolint:unused
+	return func(p *Program) {
+		p.startupOptions |= withWindowsInputMode
+		p.win32Input = true
+	}
+}
+
+// WithoutGraphemeClustering disables grapheme clustering. This is useful if you
+// want to disable grapheme clustering for your program.
+//
+// Grapheme clustering is a character width calculation method that accurately
+// calculates the width of wide characters in a terminal. This is useful for
+// properly rendering double width characters such as emojis and CJK
+// characters.
+//
+// See https://mitchellh.com/writing/grapheme-clusters-in-terminals
+func WithoutGraphemeClustering() ProgramOption {
+	return func(p *Program) {
+		p.startupOptions |= withoutGraphemeClustering
 	}
 }

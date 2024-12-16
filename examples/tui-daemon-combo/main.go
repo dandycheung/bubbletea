@@ -13,14 +13,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
-	"github.com/muesli/reflow/indent"
 )
 
-var helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render
+var (
+	helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render
+	mainStyle = lipgloss.NewStyle().MarginLeft(1)
+)
 
 func main() {
-	rand.Seed(time.Now().UTC().UnixNano())
-
 	var (
 		daemonMode bool
 		showHelp   bool
@@ -77,7 +77,7 @@ func newModel() model {
 func (m model) Init() tea.Cmd {
 	log.Println("Starting work...")
 	return tea.Batch(
-		spinner.Tick,
+		m.spinner.Tick,
 		runPretendProcess,
 	)
 }
@@ -120,7 +120,7 @@ func (m model) View() string {
 		s += "\n"
 	}
 
-	return indent.String(s, 1)
+	return mainStyle.Render(s)
 }
 
 // processFinishedMsg is sent when a pretend process completes.
@@ -128,12 +128,12 @@ type processFinishedMsg time.Duration
 
 // pretendProcess simulates a long-running process.
 func runPretendProcess() tea.Msg {
-	pause := time.Duration(rand.Int63n(899)+100) * time.Millisecond
+	pause := time.Duration(rand.Int63n(899)+100) * time.Millisecond // nolint:gosec
 	time.Sleep(pause)
 	return processFinishedMsg(pause)
 }
 
 func randomEmoji() string {
 	emojis := []rune("🍦🧋🍡🤠👾😭🦊🐯🦆🥨🎏🍔🍒🍥🎮📦🦁🐶🐸🍕🥐🧲🚒🥇🏆🌽")
-	return string(emojis[rand.Intn(len(emojis))])
+	return string(emojis[rand.Intn(len(emojis))]) // nolint:gosec
 }

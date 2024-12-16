@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,19 +17,19 @@ import (
 var (
 	focusedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	blurredStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	cursorStyle         = focusedStyle.Copy()
+	cursorStyle         = focusedStyle
 	noStyle             = lipgloss.NewStyle()
-	helpStyle           = blurredStyle.Copy()
+	helpStyle           = blurredStyle
 	cursorModeHelpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 
-	focusedButton = focusedStyle.Copy().Render("[ Submit ]")
+	focusedButton = focusedStyle.Render("[ Submit ]")
 	blurredButton = fmt.Sprintf("[ %s ]", blurredStyle.Render("Submit"))
 )
 
 type model struct {
 	focusIndex int
 	inputs     []textinput.Model
-	cursorMode textinput.CursorMode
+	cursorMode cursor.Mode
 }
 
 func initialModel() model {
@@ -39,7 +40,7 @@ func initialModel() model {
 	var t textinput.Model
 	for i := range m.inputs {
 		t = textinput.New()
-		t.CursorStyle = cursorStyle
+		t.Cursor.Style = cursorStyle
 		t.CharLimit = 32
 
 		switch i {
@@ -77,12 +78,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Change cursor mode
 		case "ctrl+r":
 			m.cursorMode++
-			if m.cursorMode > textinput.CursorHide {
-				m.cursorMode = textinput.CursorBlink
+			if m.cursorMode > cursor.CursorHide {
+				m.cursorMode = cursor.CursorBlink
 			}
 			cmds := make([]tea.Cmd, len(m.inputs))
 			for i := range m.inputs {
-				cmds[i] = m.inputs[i].SetCursorMode(m.cursorMode)
+				cmds[i] = m.inputs[i].Cursor.SetMode(m.cursorMode)
 			}
 			return m, tea.Batch(cmds...)
 
